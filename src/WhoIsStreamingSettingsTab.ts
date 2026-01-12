@@ -1,7 +1,8 @@
 import { App, Modal, PluginSettingTab, Setting, Notice } from "obsidian";
 import { isPluginEnabled } from "obsidian-dataview";
 import WhoIsStreamingPlugin from "./main";
-import { JellyfinInstance } from "./settings";
+import { JellyfinInstance, PlexSettings } from "./settings";
+import PlexApiService from "./PlexApiService";
 
 class FolderSelectionModal extends Modal {
   folders: string[];
@@ -126,15 +127,290 @@ class JellyfinInstanceModal extends Modal {
   }
 }
 
+class PlexConfigModal extends Modal {
+  settings: PlexSettings;
+  onSave: (settings: PlexSettings) => void;
+  pollingCancelled: boolean = false;
+  authStatus: "unknown" | "authenticated" | "unauthenticated" = "unknown";
+  plexApi: PlexApiService = new PlexApiService();
+
+  constructor(app: App, settings: PlexSettings, onSave: (settings: PlexSettings) => void) {
+    super(app);
+    this.settings = { ...settings };
+    this.onSave = onSave;
+  }
+
+  private generateClientIdentifier(): string {
+    if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
+      return crypto.randomUUID();
+    }
+    return `plex-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  }
+
+  private async startAuthFlow(): Promise<void> {
+    if (!this.settings.appName || !this.settings.clientIdentifier) {
+      new Notice("Please fill in the app name and client identifier first");
+      return;
+    }
+
+    try {
+      const pin = await this.plexApi.createPin(this.settings.appName, this.settings.clientIdentifier);
+      const authUrl = this.plexApi.buildAuthUrl({
+        clientIdentifier: this.settings.clientIdentifier,
+        pinCode: pin.code,
+        appName: this.settings.appName,
+      });
+
+      console.log('here')
+      window.open(authUrl);
+      new Notice("Complete Plex sign-in in your browser. Waiting for confirmation...", 8000);
+
+      const token = await this.plexApi.pollForToken({
+        pinId: pin.id,
+        pinCode: pin.code,
+        clientIdentifier: this.settings.clientIdentifier,
+        shouldCancel: () => this.pollingCancelled,
+      });
+
+      if (!token) {
+        new Notice("Plex sign-in not completed.");
+        return;
+      }
+
+      this.settings.accessToken = token;
+      this.onSave(this.settings);
+      new Notice("Plex authentication complete.");
+      this.authStatus = "authenticated";
+      this.onOpen();
+    } catch (error: unknown) {
+      new Notice("Plex authentication failed. Check console for details.");
+      console.error("Plex authentication error:", error);
+    }
+  }
+
+  private async runConnectionTest(): Promise<void> {
+    if (!this.settings.appName || !this.settings.clientIdentifier) {
+      new Notice("Please fill in the app name and client identifier first");
+      return;
+    }
+
+    const isValid = await this.plexApi.validateToken(
+      this.settings.appName,
+      this.settings.clientIdentifier,
+      this.settings.accessToken
+    );
+
+    let sectionsOutput = "";
+    let itemsOutput = "";
+    if (isValid) {
+      try {
+        const resources = await this.plexApi.getResources(
+          this.settings.appName,
+          this.settings.clientIdentifier,
+          this.settings.accessToken
+        );
+
+        const resourceList = Array.isArray(resources) ? resources : [];
+        const servers = resourceList.filter((resource) => {
+          const provides = resource?.provides;
+          return typeof provides === "string" && provides.includes("server");
+        });
+
+        const selectedNames = this.settings.serversToSync;
+        const selectedServers = selectedNames.length > 0
+          ? servers.filter((server) => selectedNames.includes(server?.name))
+          : servers;
+
+        const targetServer = selectedServers[0];
+        const serverUri = targetServer?.connections?.[0]?.uri;
+
+        if (serverUri) {
+          const sections = await this.plexApi.getLibrarySections(
+            serverUri,
+            this.settings.accessToken
+          );
+          sectionsOutput = typeof sections === "string" ? sections : JSON.stringify(sections, null, 2);
+
+          const sectionKey = sections?.MediaContainer?.Directory?.[0]?.key;
+          if (sectionKey) {
+            const items = await this.plexApi.getLibraryItems(
+              serverUri,
+              sectionKey.toString(),
+              this.settings.accessToken
+            );
+            itemsOutput = typeof items === "string" ? items : JSON.stringify(items, null, 2);
+          } else {
+            itemsOutput = "No library sections available to query.";
+          }
+        } else {
+          sectionsOutput = "No Plex server URI available.";
+        }
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : "Unknown error";
+        sectionsOutput = `Error fetching library sections: ${message}`;
+        itemsOutput = `Error fetching library items: ${message}`;
+      }
+    }
+
+    const timestamp = new Date().toLocaleString();
+    const content = [
+      "# Plex Connection Test",
+      "",
+      `Timestamp: ${timestamp}`,
+      `App Name: ${this.settings.appName || "(not set)"}`,
+      `Client Identifier: ${this.settings.clientIdentifier || "(not set)"}`,
+      `Authenticated: ${isValid ? "Yes" : "No"}`,
+      "",
+      "## Library Sections",
+      sectionsOutput || "(not available)",
+      "",
+      "## Library Items (first section)",
+      itemsOutput || "(not available)",
+      "",
+      "Notes:",
+      "- This test verifies the Plex access token against plex.tv.",
+      "- The access token is stored internally and is not shown here.",
+      ""
+    ].join("\n");
+
+    await this.app.vault.adapter.write("PlexTest.md", content);
+    new Notice("Wrote PlexTest.md with connection results.");
+  }
+
+  onOpen() {
+    const { contentEl } = this;
+    contentEl.empty();
+    contentEl.createEl("h3", { text: "Plex configuration" });
+
+    contentEl.createEl("p", {
+      text: "These values identify this plugin to Plex. The app name appears in Plex Authorized Devices, and the client identifier is generated by the plugin for this install.",
+      cls: "setting-item-description"
+    });
+
+    new Setting(contentEl)
+      .setName("App name")
+      .setDesc("Shown in Plex Authorized Devices (e.g., Who Is Streaming)")
+      .addText((text) => {
+        text
+          .setPlaceholder("Who Is Streaming")
+          .setValue(this.settings.appName)
+          .onChange((value) => {
+            this.settings.appName = value;
+          });
+      });
+
+    new Setting(contentEl)
+      .setName("Client identifier")
+      .setDesc("Unique ID for this plugin install; generated by the plugin")
+      .addText((text) => {
+        text
+          .setPlaceholder("auto-generated")
+          .setValue(this.settings.clientIdentifier)
+          .onChange((value) => {
+            this.settings.clientIdentifier = value;
+          });
+      })
+      .addButton((button) => {
+        button
+          .setButtonText("Generate")
+          .onClick(() => {
+            this.settings.clientIdentifier = this.generateClientIdentifier();
+            this.onOpen();
+          });
+      });
+
+    const statusSetting = new Setting(contentEl)
+      .setName("Authentication status")
+      .setDesc(" ");
+
+    const statusBadge = statusSetting.controlEl.createSpan({ cls: "plex-auth-status" });
+    const statusClasses = [
+      "plex-auth-status--ok",
+      "plex-auth-status--bad",
+      "plex-auth-status--pending",
+    ];
+
+    const setStatusBadge = (status: "unknown" | "authenticated" | "unauthenticated") => {
+      statusClasses.forEach((cls) => statusBadge.removeClass(cls));
+      if (status === "authenticated") {
+        statusBadge.setText("Authenticated");
+        statusBadge.addClass("plex-auth-status--ok");
+      } else if (status === "unauthenticated") {
+        statusBadge.setText("Not authenticated");
+        statusBadge.addClass("plex-auth-status--bad");
+      } else {
+        statusBadge.setText("Checking...");
+        statusBadge.addClass("plex-auth-status--pending");
+      }
+    };
+
+    setStatusBadge(this.authStatus);
+
+    if (this.authStatus === "unknown") {
+      void (async () => {
+        const isValid = await this.plexApi.validateToken(
+          this.settings.appName,
+          this.settings.clientIdentifier,
+          this.settings.accessToken
+        );
+        this.authStatus = isValid ? "authenticated" : "unauthenticated";
+        this.onOpen();
+      })();
+    }
+
+    new Setting(contentEl)
+      .setName("Plex connection test")
+      .setDesc("Checks Plex connectivity using the stored access token")
+      .addButton((button) => {
+        button
+          .setButtonText("Run test")
+          .onClick(() => {
+            void this.runConnectionTest();
+          });
+      });
+
+    const buttonContainer = contentEl.createDiv({ cls: "jellyfin-modal-buttons" });
+
+    if (this.authStatus !== "authenticated") {
+      const connectBtn = buttonContainer.createEl("button", { cls: "mod-cta" });
+      connectBtn.setText("Connect");
+      connectBtn.addEventListener("click", () => {
+        void this.startAuthFlow();
+      });
+    } else {
+      const disconnectBtn = buttonContainer.createEl("button", { cls: "mod-warning" });
+      disconnectBtn.setText("Disconnect");
+      disconnectBtn.addEventListener("click", () => {
+        this.settings.accessToken = "";
+        this.onSave(this.settings);
+        this.authStatus = "unauthenticated";
+        this.onOpen();
+      });
+    }
+
+    const cancelBtn = buttonContainer.createEl("button");
+    cancelBtn.setText("Cancel");
+    cancelBtn.addEventListener("click", () => {
+      this.close();
+    });
+  }
+
+  onClose() {
+    this.pollingCancelled = true;
+  }
+}
+
 export class WhoIsStreamingSettingsTab extends PluginSettingTab {
   plugin: WhoIsStreamingPlugin;
   countrySetting: Setting;
   streamingServicesElement: HTMLElement;
+  plexServersElement: HTMLElement;
 
   constructor(app: App, plugin: WhoIsStreamingPlugin) {
     super(app, plugin);
     this.plugin = plugin;
     this.streamingServicesElement = createDiv();
+    this.plexServersElement = createDiv();
   }
 
   display(): void {
@@ -346,6 +622,37 @@ export class WhoIsStreamingSettingsTab extends PluginSettingTab {
           });
       });
 
+    new Setting(containerEl).setName("Plex integration").setHeading();
+
+    const plexDescription = new DocumentFragment();
+    const plexDescEl = plexDescription.createDiv({ cls: "setting-item-description" });
+    plexDescEl.appendText("Configure the app name and client identifier for Plex authentication. The client identifier is generated by the plugin and identifies this install.");
+
+    new Setting(containerEl)
+      .setName("Plex configuration")
+      .setDesc(plexDescription)
+      .addButton((button) => {
+        button
+          .setButtonText("Configure Plex")
+          .setCta()
+          .onClick(() => {
+            new PlexConfigModal(
+              this.app,
+              this.plugin.settings.plex,
+              (updatedSettings) => {
+                void (async () => {
+                  this.plugin.settings.plex = updatedSettings;
+                  await this.plugin.saveSettings();
+                  this.display();
+                })();
+              }
+            ).open();
+          });
+      });
+
+    containerEl.append(this.plexServersElement);
+    void this.initializePlexServers();
+
     if (isPluginEnabled(this.app)) {
       new Setting(containerEl).setName("Bulk sync").setHeading();
       new Setting(containerEl)
@@ -461,6 +768,84 @@ export class WhoIsStreamingSettingsTab extends PluginSettingTab {
 
     void this.initializeCountries();
     void this.initializeStreamingServices();
+  }
+
+  async initializePlexServers(): Promise<void> {
+    this.plexServersElement.empty();
+
+    new Setting(this.plexServersElement)
+      .setName("Plex servers")
+      .setDesc("Select which Plex servers the plugin can query");
+
+    const plexSettings = this.plugin.settings.plex;
+    if (!plexSettings.accessToken || !plexSettings.appName || !plexSettings.clientIdentifier) {
+      new Setting(this.plexServersElement)
+        .setDesc("Authenticate with Plex to load servers.");
+      return;
+    }
+
+    try {
+      const plexApi = new PlexApiService();
+      const resources = await plexApi.getResources(
+        plexSettings.appName,
+        plexSettings.clientIdentifier,
+        plexSettings.accessToken
+      );
+
+      let resourceList: unknown = resources;
+      if (typeof resourceList === "string") {
+        try {
+          resourceList = JSON.parse(resourceList);
+        } catch {
+          resourceList = [];
+        }
+      }
+
+      const servers = Array.isArray(resourceList)
+        ? resourceList.filter((resource) => {
+            const provides = resource?.provides;
+            return typeof provides === "string" && provides.includes("server");
+          })
+        : [];
+
+      if (servers.length === 0) {
+        new Setting(this.plexServersElement)
+          .setDesc("No Plex servers found for this account.");
+        return;
+      }
+
+      const serversToSync = Array.isArray(plexSettings.serversToSync) ? plexSettings.serversToSync : [];
+
+      servers.forEach((server) => {
+        const name = server?.name || server?.clientIdentifier || "Unknown server";
+        new Setting(this.plexServersElement)
+          .setName(name)
+          .addToggle((toggle) => {
+            toggle
+              .setValue(serversToSync.includes(name))
+              .onChange((value) => {
+                void (async () => {
+                  if (value) {
+                    if (!serversToSync.includes(name)) {
+                      serversToSync.push(name);
+                    }
+                  } else {
+                    const updated = serversToSync.filter(
+                      (serverName) => serverName !== name
+                    );
+                    serversToSync.length = 0;
+                    serversToSync.push(...updated);
+                  }
+                  plexSettings.serversToSync = serversToSync;
+                  await this.plugin.saveSettings();
+                })();
+              });
+          });
+      });
+    } catch (error: unknown) {
+      new Notice("Failed to load Plex servers. Please try again.");
+      console.error("Plex server discovery failed:", error);
+    }
   }
 
   async initializeCountries(): Promise<void> {

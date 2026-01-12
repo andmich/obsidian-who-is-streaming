@@ -97,6 +97,11 @@ export interface WhoIsStreamingSettings {
   jellyfinInstances: JellyfinInstance[];
 
   /**
+   * Plex configuration (single account)
+   */
+  plex: PlexSettings;
+
+  /**
    * Rate limit warning threshold (percentage, 0-100).
    * Shows a warning when API quota usage reaches this percentage.
    * For example, 80 means warn when 80% of quota has been used.
@@ -125,6 +130,28 @@ export interface WhoIsStreamingSettings {
   defaultEnabledFields: string[];
 }
 
+export interface PlexSettings {
+  /**
+   * App name shown in Plex Authorized Devices
+   */
+  appName: string;
+
+  /**
+   * Persistent client identifier for this plugin install
+   */
+  clientIdentifier: string;
+
+  /**
+   * Access token stored internally (hidden from UI)
+   */
+  accessToken: string;
+
+  /**
+   * Plex server names selected for queries
+   */
+  serversToSync: string[];
+}
+
 export const DEFAULT_SETTINGS: WhoIsStreamingSettings = {
   apiKey: "",
   country: "us",
@@ -140,6 +167,12 @@ export const DEFAULT_SETTINGS: WhoIsStreamingSettings = {
   showPreviewDialog: true,
   gridPosterSize: 200,
   jellyfinInstances: [],
+  plex: {
+    appName: "",
+    clientIdentifier: "",
+    accessToken: "",
+    serversToSync: [],
+  },
   rateLimitWarningThreshold: 80,
   defaultEnabledFields: [
     "File Name",

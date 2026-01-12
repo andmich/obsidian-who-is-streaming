@@ -806,3 +806,25 @@
 .theme-dark .preview-poster-thumbnail {
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
 }
+
+.plex-auth-status {
+  padding: 2px 8px;
+  border-radius: 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.plex-auth-status--ok {
+  color: #2e7d32;
+  background-color: #e8f5e9;
+}
+
+.plex-auth-status--bad {
+  color: #b71c1c;
+  background-color: #ffebee;
+}
+
+.plex-auth-status--pending {
+  color: #5f6368;
+  background-color: #f1f3f4;
+}

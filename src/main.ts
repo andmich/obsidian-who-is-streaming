@@ -590,7 +590,14 @@ export default class WhoIsStreamingPlugin extends Plugin {
 
   async loadSettings() {
     const loadedData = await this.loadData();
-    this.settings = Object.assign({}, DEFAULT_SETTINGS, loadedData);
+    this.settings = {
+      ...DEFAULT_SETTINGS,
+      ...loadedData,
+      plex: {
+        ...DEFAULT_SETTINGS.plex,
+        ...(loadedData?.plex ?? {}),
+      },
+    };
   }
 
   async saveSettings() {
