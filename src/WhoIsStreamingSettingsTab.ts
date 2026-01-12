@@ -84,7 +84,7 @@ class JellyfinInstanceModal extends Modal {
 
     new Setting(contentEl)
       .setName("API key")
-      .setDesc("Jellyfin API key (generate in Dashboard ‚Üí API keys)")
+      .setDesc("Jellyfin API key (generate in Dashboard GÂ∆ API keys)")
       .addText((text) => {
         text
           .setPlaceholder("API key")
@@ -216,9 +216,13 @@ class PlexConfigModal extends Modal {
           return typeof provides === "string" && provides.includes("server");
         });
 
-        const selectedNames = this.settings.serversToSync;
-        const selectedServers = selectedNames.length > 0
-          ? servers.filter((server) => selectedNames.includes(server?.name))
+        const configuredServers = Array.isArray(this.settings.servers) ? this.settings.servers : [];
+        const enabledServers = configuredServers.filter((server) => server.enabled);
+        const selectedServers = enabledServers.length > 0
+          ? servers.filter((server) => {
+              const name = server?.name || server?.clientIdentifier || "Unknown server";
+              return enabledServers.some((configured) => configured.name === name);
+            })
           : servers;
 
         const targetServer = selectedServers[0];
@@ -814,29 +818,46 @@ export class WhoIsStreamingSettingsTab extends PluginSettingTab {
         return;
       }
 
-      const serversToSync = Array.isArray(plexSettings.serversToSync) ? plexSettings.serversToSync : [];
+      const configuredServers = Array.isArray(plexSettings.servers) ? plexSettings.servers : [];
 
-      servers.forEach((server) => {
+      const configuredByName = new Map(configuredServers.map((server) => [server.name, server]));
+      const updatedServers = servers.map((server) => {
         const name = server?.name || server?.clientIdentifier || "Unknown server";
+        const uri = server?.connections?.[0]?.uri || "";
+        const accessToken = server?.accessToken || plexSettings.accessToken;
+        const existing = configuredByName.get(name);
+
+        return {
+          name,
+          uri: existing?.uri || uri,
+          accessToken: existing?.accessToken || accessToken,
+          enabled: existing?.enabled ?? false,
+        };
+      });
+
+      const hasChanges = updatedServers.length != configuredServers.length
+        || updatedServers.some((server) => {
+          const existing = configuredByName.get(server.name);
+          return !existing
+            || existing.uri != server.uri
+            || existing.accessToken != server.accessToken
+            || existing.enabled != server.enabled;
+        });
+
+      plexSettings.servers = updatedServers;
+      if (hasChanges) {
+        await this.plugin.saveSettings();
+      }
+
+      updatedServers.forEach((serverConfig) => {
         new Setting(this.plexServersElement)
-          .setName(name)
+          .setName(serverConfig.name)
           .addToggle((toggle) => {
             toggle
-              .setValue(serversToSync.includes(name))
+              .setValue(serverConfig.enabled)
               .onChange((value) => {
                 void (async () => {
-                  if (value) {
-                    if (!serversToSync.includes(name)) {
-                      serversToSync.push(name);
-                    }
-                  } else {
-                    const updated = serversToSync.filter(
-                      (serverName) => serverName !== name
-                    );
-                    serversToSync.length = 0;
-                    serversToSync.push(...updated);
-                  }
-                  plexSettings.serversToSync = serversToSync;
+                  serverConfig.enabled = value;
                   await this.plugin.saveSettings();
                 })();
               });
@@ -906,7 +927,7 @@ export class WhoIsStreamingSettingsTab extends PluginSettingTab {
       }
 
       if (!countries[this.plugin.settings.country]) {
-        new Notice(`‚ö†Ô∏è Country "${this.plugin.settings.country}" not available. Please select a different country.`);
+        new Notice(`G‹·n+≈ Country "${this.plugin.settings.country}" not available. Please select a different country.`);
         return;
       }
 

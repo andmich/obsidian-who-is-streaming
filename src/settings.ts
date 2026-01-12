@@ -130,6 +130,28 @@ export interface WhoIsStreamingSettings {
   defaultEnabledFields: string[];
 }
 
+export interface PlexServer {
+  /**
+   * Plex server display name
+   */
+  name: string;
+
+  /**
+   * Base URL for the server connection
+   */
+  uri: string;
+
+  /**
+   * Access token for the server connection
+   */
+  accessToken: string;
+
+  /**
+   * Whether this server is enabled for availability checks
+   */
+  enabled: boolean;
+}
+
 export interface PlexSettings {
   /**
    * App name shown in Plex Authorized Devices
@@ -147,10 +169,11 @@ export interface PlexSettings {
   accessToken: string;
 
   /**
-   * Plex server names selected for queries
+   * Plex servers configured for availability checks
    */
-  serversToSync: string[];
+  servers: PlexServer[];
 }
+
 
 export const DEFAULT_SETTINGS: WhoIsStreamingSettings = {
   apiKey: "",
@@ -171,7 +194,7 @@ export const DEFAULT_SETTINGS: WhoIsStreamingSettings = {
     appName: "",
     clientIdentifier: "",
     accessToken: "",
-    serversToSync: [],
+    servers: [],
   },
   rateLimitWarningThreshold: 80,
   defaultEnabledFields: [
@@ -188,3 +211,4 @@ export const DEFAULT_SETTINGS: WhoIsStreamingSettings = {
     "Episodes",
   ],
 };
+

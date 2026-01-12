@@ -9,6 +9,8 @@ import { PreviewSyncModal } from "./PreviewSyncModal";
 import { BulkSyncProgressModal } from "./BulkSyncProgressModal";
 import StreamingAvailabilityApiService from "./StreamingAvailabilityApiService";
 import JellyfinApiService, { JellyfinAvailability } from "./JellyfinApiService";
+
+import PlexApiService from "./PlexApiService";
 import { MoviesBasesView, MoviesViewType } from "./MoviesBasesView";
 import { WhoIsStreamingSettings, DEFAULT_SETTINGS } from "./settings";
 
@@ -33,10 +35,13 @@ export default class WhoIsStreamingPlugin extends Plugin {
   streamingAvailabilityApi: StreamingAvailabilityApiService;
   jellyfinApiService: JellyfinApiService;
 
+  plexApiService: PlexApiService;
+
   async onload() {
     await this.loadSettings();
     this.setupApiClient();
     this.jellyfinApiService = new JellyfinApiService();
+    this.plexApiService = new PlexApiService();
 
     this.addSettingTab(new WhoIsStreamingSettingsTab(this.app, this));
 
@@ -68,10 +73,23 @@ export default class WhoIsStreamingPlugin extends Plugin {
           await this.syncJellyfinActiveFile();
       }});
     }
+
+    const hasEnabledPlexServers = Array.isArray(this.settings.plex?.servers)
+      && this.settings.plex.servers.some((server) => server.enabled);
+
+    if (hasEnabledPlexServers) {
+      this.addCommand({ id: "bulk-sync-plex", name: "Bulk sync Plex", callback: async () => {
+          await this.syncPlexForAllFiles();
+      }});
+      this.addCommand({ id: "sync-plex", name: "Sync Plex", editorCallback: async (editor: Editor, view: MarkdownView) => {
+          await this.syncPlexActiveFile();
+      }});
+    }
   }
 
   onunload() {
     this.jellyfinApiService.clearCache();
+    this.plexApiService.clearCache();
   }
 
   async syncActiveFile() {
@@ -186,7 +204,6 @@ export default class WhoIsStreamingPlugin extends Plugin {
       new Notice("❌ No Jellyfin instances configured");
       return;
     }
-
     const findingNotice = new Notice("🔄 Finding files with TMDB id...", 0);
 
     const allFiles = this.app.vault.getMarkdownFiles();
@@ -269,13 +286,13 @@ export default class WhoIsStreamingPlugin extends Plugin {
 
   async syncJellyfinActiveFile() {
     if (this.settings.jellyfinInstances.length === 0) {
-      new Notice("❌ No Jellyfin instances configured");
+      new Notice("Γ¥î No Jellyfin instances configured");
       return;
     }
 
     const activeFile = this.app.workspace.getActiveFile();
     if (!activeFile) {
-      new Notice("❌ No active file");
+      new Notice("Γ¥î No active file");
       return;
     }
 
@@ -283,11 +300,11 @@ export default class WhoIsStreamingPlugin extends Plugin {
       const [tmdb_id, showType] = await this.getTmdbId(activeFile);
 
       if (!tmdb_id || !showType) {
-        new Notice("❌ No TMDB id found in frontmatter");
+        new Notice("Γ¥î No TMDB id found in frontmatter");
         return;
       }
 
-      new Notice("🔄 Syncing with Jellyfin...");
+      new Notice("≡ƒöä Syncing with Jellyfin...");
 
       const jellyfinAvailability = await this.jellyfinApiService.checkAvailability(
         this.settings.jellyfinInstances,
@@ -319,13 +336,108 @@ export default class WhoIsStreamingPlugin extends Plugin {
         }
       });
 
-      new Notice("✅ Jellyfin sync complete");
+      new Notice("Γ£à Jellyfin sync complete");
     } catch (error: unknown) {
-      new Notice("❌ Failed to sync with Jellyfin");
+      new Notice("Γ¥î Failed to sync with Jellyfin");
       console.error('Jellyfin sync failed:', error);
     }
   }
 
+
+  async syncPlexForAllFiles() {
+    new Notice("Plex sync is not implemented yet.");
+  }
+
+  async syncPlexActiveFile() {
+    const plexServers = Array.isArray(this.settings.plex?.servers)
+      ? this.settings.plex.servers.filter((server) => server.enabled)
+      : [];
+
+    if (plexServers.length === 0) {
+      new Notice("No Plex servers configured");
+      return;
+    }
+
+    const activeFile = this.app.workspace.getActiveFile();
+    if (!activeFile) {
+      new Notice("No active file");
+      return;
+    }
+
+    try {
+      const [, showType] = await this.getTmdbId(activeFile);
+
+      if (!showType) {
+        new Notice("No Type found in frontmatter");
+        return;
+      }
+
+      const frontmatter = await this.getCurrentFrontmatter(activeFile);
+      const rawTitleValue = typeof frontmatter["Title"] === "string"
+        ? (frontmatter["Title"] as string)
+        : typeof frontmatter["title"] === "string"
+          ? (frontmatter["title"] as string)
+          : activeFile.basename;
+
+      const titleValue = rawTitleValue.replace(/\s*\(\d{4}\)\s*$/, "");
+
+      const yearValue = frontmatter["Year"];
+      let year: number | undefined = undefined;
+      if (typeof yearValue === "number") {
+        year = yearValue;
+      } else if (typeof yearValue === "string") {
+        const parsed = Number.parseInt(yearValue, 10);
+        if (!Number.isNaN(parsed)) {
+          year = parsed;
+        }
+      }
+
+      new Notice("Syncing with Plex...");
+
+      const instances = plexServers.map((server) => ({
+        name: server.name,
+        uri: server.uri,
+        accessToken: server.accessToken,
+      }));
+
+      const plexAvailability = await this.plexApiService.checkAvailabilityByTitle(
+        instances,
+        titleValue,
+        year,
+        showType === "movie" ? "movie" : "series"
+      );
+
+      await this.app.fileManager.processFrontMatter(activeFile, (frontmatter) => {
+        for (const availability of plexAvailability) {
+          if (availability.available) {
+            frontmatter[availability.instanceName] = "Available";
+
+            if (availability.itemId) {
+              const instance = plexServers.find((server) => server.name === availability.instanceName);
+              if (instance) {
+                const baseUrl = instance.uri.replace(/\/+$/, "");
+                const key = encodeURIComponent(`/library/metadata/${availability.itemId}`);
+                const link = `${baseUrl}/web/index.html#!/details?key=${key}`;
+                frontmatter[`${availability.instanceName} Link`] = link;
+              }
+            }
+          } else {
+            frontmatter[availability.instanceName] = "Not available";
+          }
+        }
+
+        const isWatched = plexAvailability.some((availability) => availability.watched === true);
+        if (isWatched) {
+          frontmatter["Watched"] = true;
+        }
+      });
+
+      new Notice("Plex sync complete");
+    } catch (error: unknown) {
+      new Notice("Failed to sync with Plex");
+      console.error("Plex sync failed:", error);
+    }
+  }
   async getFilesToSync(): Promise<TFile[]> {
     if (!isPluginEnabled(this.app) || this.settings.bulkSyncDataviewQuery.length === 0) {
       return this.app.vault.getMarkdownFiles();
