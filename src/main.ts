@@ -379,7 +379,7 @@ export default class WhoIsStreamingPlugin extends Plugin {
           ? (frontmatter["title"] as string)
           : activeFile.basename;
 
-      const titleValue = rawTitleValue.replace(/\s*\(\d{4}\)\s*$/, "");
+      const titleValue = rawTitleValue.replace(/\s*\(\d{4}(?:-\d{4})?\)\s*$/, "").replace(/\s*\(\d{4}-\)\s*$/, "");
 
       const yearValue = frontmatter["Year"];
       let year: number | undefined = undefined;
