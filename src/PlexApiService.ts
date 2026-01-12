@@ -397,15 +397,6 @@ export default class PlexApiService {
         if (!section.key) {
           continue;
         }
-
-        console.log({
-          baseUrl: baseUrl,
-          sectionKey: section.key.toString(),
-          at: instance.accessToken,
-          title: title,
-          year: year,
-          itemType: itemType
-        })
         
         const itemsResponse = await this.getLibraryItemsByTitleYear(
           baseUrl,
