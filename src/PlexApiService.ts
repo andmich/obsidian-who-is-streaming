@@ -209,8 +209,6 @@ export default class PlexApiService {
       body,
     });
 
-    console.log(response);
-
     return response.status === 200;
   }
 
@@ -312,8 +310,6 @@ export default class PlexApiService {
     const cacheKey = `items:${serverUri}:${sectionKey}:${itemType ?? "all"}:${title}:${year ?? "any"}`;
     const cached = this.getCached<unknown>(cacheKey);
     if (cached) {
-
-      console.log('cached');
       return cached;
     }
 
@@ -407,11 +403,7 @@ export default class PlexApiService {
           itemType
         );
 
-        console.log("Items Response: ", itemsResponse)
-
         const items = this.extractItems(itemsResponse);
-
-        console.log("Items Extracted: ", items);
         const matchingItem = items.find((item) => this.matchesTitle(item, title, year));
 
         if (matchingItem) {
@@ -472,12 +464,7 @@ export default class PlexApiService {
           itemType
         );
 
-        console.log("Items: ", itemsResponse);
-
         const items = this.extractItems(itemsResponse);
-
-        console.log("Items Extracted: ", items);
-        
         const matchingItem = items.find((item) => this.getTmdbIdFromItem(item) === tmdbIdString);
 
         if (matchingItem) {
@@ -500,8 +487,6 @@ export default class PlexApiService {
     const results = await Promise.all(
       instances.map(async (instance) => {
         const result = await this.isAvailableInPlex(instance, tmdbId, showType);
-
-        console.log("Result: ", result);
 
         return {
           instanceName: instance.name,

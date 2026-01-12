@@ -707,11 +707,6 @@ export class WhoIsStreamingSettingsTab extends PluginSettingTab {
       .setDesc("Select which Plex servers the plugin can query");
 
     const plexSettings = this.plugin.settings.plex;
-    // if (!plexSettings.accessToken || !plexSettings.appName || !plexSettings.clientIdentifier) {
-    //   new Setting(this.plexServersElement)
-    //     .setDesc("Authenticate with Plex to load servers.");
-    //   return;
-    // }
 
     try {
       const plexApi = new PlexApiService();
